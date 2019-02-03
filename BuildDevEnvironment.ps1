@@ -1,6 +1,14 @@
 $configData = Import-PowerShellDataFile -Path '.\configdata.psd1'
 
 <#
+Tools
+Connect to the Service
+Connect-AzAccount - this causes the console to hang at the moment - bug?
+
+Connect to Jump VM
+$jumppip = (Get-AzPublicIpAddress -ResourceGroupName $configData.ResourceGroupName -Name 'JumpPIP').IpAddress
+mstsc /v:"$jumppip" /admin
+
 Cleanup Tasks
 Remove-AzResourceGroup -Name $configData.ResourceGroupName -Force -Verbose -AsJob
 #>
@@ -8,6 +16,8 @@ Remove-AzResourceGroup -Name $configData.ResourceGroupName -Force -Verbose -AsJo
 # Build Resource Group
 New-AzResourceGroup -ResourceGroupName $configData.ResourceGroupName -Location $configData.Location
 
+
+#region Subnets
 # Define the Remote Subnet - for external access and admin
 $remoteSubnetSplat = @{
     Name          = $configData.Remote.SubnetName
@@ -45,22 +55,10 @@ $vnetSplat = @{
     Subnet            = $remoteSubnet, $wsmSubnet, $portisheadSubnet, $winscombeSubnet
 }
 $vnet = New-AzVirtualNetwork @vnetSplat -Verbose
-
-# Create a Public IP for the Jump Server
-$pipSplat = @{
-    ResourceGroupName = $configData.ResourceGroupName
-    Location          = $configData.Location
-    AllocationMethod  = 'Dynamic'
-    Name              = 'JumpPIP'
-}
-$pip = New-AzPublicIpAddress @pipSplat -Verbose
-
-# Building Credential for VMs
-$credential = [pscredential]::new($configData.AdminUserName, (ConvertTo-SecureString -String $configData.AdminPassword -asPlainText -Force ))
+#endregion Subnets
 
 
-#region NetworkSecurity
-
+#region Networking
 # Defining Internal Network Security Rules
 $ruleAllInboundAllowSplat = @{
     Name                     = 'internalcomms-rule-inbound'
@@ -76,7 +74,17 @@ $ruleAllInboundAllowSplat = @{
 }
 $ruleAllInboundAllow = New-AzNetworkSecurityRuleConfig @ruleAllInboundAllowSplat
 
+
 #region RemoteNetworking
+# Create a Public IP for the Jump Server
+$pipSplat = @{
+    ResourceGroupName = $configData.ResourceGroupName
+    Location          = $configData.Location
+    AllocationMethod  = 'Dynamic'
+    Name              = 'JumpPIP'
+}
+$pip = New-AzPublicIpAddress @pipSplat -Verbose
+
 # Defining Network Security Rules for Jump Server
 $ruleRDPAllowSplat = @{
     Name                     = 'rdp-rule'
@@ -113,7 +121,6 @@ $remoteSubnetConfig = Set-AzVirtualNetworkSubnetConfig @remoteSubnetConfigSplat 
 
 
 #region WSMNetworking
-
 # Building Network Security Group for WSM Server
 $nsgWsmSplat = @{
     ResourceGroupName = $configData.ResourceGroupName
@@ -178,9 +185,13 @@ $portisheadSubnetConfig = Set-AzVirtualNetworkSubnetConfig @portisheadSubnetConf
 
 # Applying the new Vnet Config
 Set-AzVirtualNetwork -VirtualNetwork $vnet -Verbose
-#endregion NetworkSecurity
+#endregion Networking
+
 
 #region BuildVMs
+# Building Credential for VMs
+$credential = [pscredential]::new($configData.AdminUserName, (ConvertTo-SecureString -String $configData.AdminPassword -asPlainText -Force ))
+
 # Building the Jump VM
 $jumpVMSplat = @{
     Credential          = $credential
@@ -238,6 +249,7 @@ $portisheadVMSplat = @{
 }
 New-AzVM @portisheadVMSplat -Verbose
 #endregion BuildVMs
+
 
 # Monitor each VM creation Job and return results as they complete
 Get-Job | Receive-Job -Wait
